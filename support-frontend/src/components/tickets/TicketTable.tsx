@@ -7,6 +7,7 @@ import { useAuth } from "@/hooks/useAuth";
 import { useUpdateTicket } from "@/hooks/useTickets";
 import { useAssignableUsers } from "@/hooks/useUsers";
 import { PriorityBadge } from "@/components/ui/Badge";
+import { ApprovalBadge } from "@/components/tickets/ApprovalBadge";
 import type { TicketSortField } from "@/lib/ticketsApi";
 import { cn, formatDateTime, formatStatus } from "@/lib/utils";
 import type { Ticket, TicketStatus, TicketType } from "@/types/ticket";
@@ -258,23 +259,26 @@ export function TicketTable({
               </td>
               {/* Inline status editing (available to all users). */}
               <td className="px-4 py-3" onClick={(e) => e.stopPropagation()}>
-                <select
-                  value={ticket.status}
-                  disabled={rowPending}
-                  onChange={(e) =>
-                    handleStatusChange(ticket, e.target.value as TicketStatus)
-                  }
-                  className={cn(
-                    "rounded-full border-0 px-2.5 py-1 text-xs font-medium focus:outline-none focus:ring-2 focus:ring-ring/40 disabled:opacity-50",
-                    STATUS_SELECT_STYLES[ticket.status]
-                  )}
-                >
-                  {STATUS_VALUES.map((s) => (
-                    <option key={s} value={s}>
-                      {formatStatus(s)}
-                    </option>
-                  ))}
-                </select>
+                <div className="flex items-center gap-2">
+                  <select
+                    value={ticket.status}
+                    disabled={rowPending}
+                    onChange={(e) =>
+                      handleStatusChange(ticket, e.target.value as TicketStatus)
+                    }
+                    className={cn(
+                      "rounded-full border-0 px-2.5 py-1 text-xs font-medium focus:outline-none focus:ring-2 focus:ring-ring/40 disabled:opacity-50",
+                      STATUS_SELECT_STYLES[ticket.status]
+                    )}
+                  >
+                    {STATUS_VALUES.map((s) => (
+                      <option key={s} value={s}>
+                        {formatStatus(s)}
+                      </option>
+                    ))}
+                  </select>
+                  <ApprovalBadge status={ticket.approval_status} />
+                </div>
               </td>
               {/* Inline assignee editing for admins; read-only text otherwise. */}
               <td className="px-4 py-3" onClick={(e) => e.stopPropagation()}>

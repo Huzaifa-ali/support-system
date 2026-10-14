@@ -90,6 +90,31 @@ export async function deleteTicket(ticketId: string): Promise<void> {
   return api.delete(`/tickets/${ticketId}`);
 }
 
+/** List tickets awaiting approval (admin only). */
+export async function listPendingTickets(
+  page = 1,
+  pageSize = 20
+): Promise<TicketListResponse> {
+  return api.get<TicketListResponse>("/tickets/pending-approval", {
+    page: String(page),
+    page_size: String(pageSize),
+  });
+}
+
+/** Approve a pending ticket (admin only). */
+export async function approveTicket(ticketId: string): Promise<TicketResponse> {
+  return api.post<TicketResponse>(`/tickets/${ticketId}/approve`, {});
+}
+
+/**
+ * Reject a pending ticket (admin only). This is a POST on the backend that
+ * returns 204 No Content, so we use api.post typed to void — the shared client
+ * returns undefined for 204 responses.
+ */
+export async function rejectTicket(ticketId: string): Promise<void> {
+  return api.post<void>(`/tickets/${ticketId}/reject`, {});
+}
+
 /** A single ticket that failed within a bulk operation. */
 export interface BulkFailure {
   ticket_id: string;

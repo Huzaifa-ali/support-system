@@ -4,13 +4,16 @@
 
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import {
+  approveTicket,
   bulkAssign,
   bulkDelete,
   bulkStatusChange,
   createTicket,
   deleteTicket,
   getTicket,
+  listPendingTickets,
   listTickets,
+  rejectTicket,
   updateTicket,
   type TicketFilters,
 } from "@/lib/ticketsApi";
@@ -120,6 +123,34 @@ export function useBulkDelete() {
   return useMutation({
     meta: { entity: "Tickets", successMessage: "Tickets deleted" },
     mutationFn: (ticketIds: string[]) => bulkDelete(ticketIds),
+    onSuccess: invalidate,
+  });
+}
+
+/** List tickets awaiting approval in the current project (admin only). */
+export function usePendingTickets(page = 1, pageSize = 20) {
+  const { selectedProjectId } = useProjectContext();
+  return useQuery({
+    queryKey: ["tickets", "pending", selectedProjectId, page, pageSize],
+    queryFn: () => listPendingTickets(page, pageSize),
+    enabled: Boolean(selectedProjectId),
+  });
+}
+
+export function useApproveTicket() {
+  const invalidate = useInvalidateTickets();
+  return useMutation({
+    meta: { entity: "Ticket", successMessage: "Ticket approved" },
+    mutationFn: (ticketId: string) => approveTicket(ticketId),
+    onSuccess: invalidate,
+  });
+}
+
+export function useRejectTicket() {
+  const invalidate = useInvalidateTickets();
+  return useMutation({
+    meta: { entity: "Ticket", successMessage: "Ticket rejected" },
+    mutationFn: (ticketId: string) => rejectTicket(ticketId),
     onSuccess: invalidate,
   });
 }

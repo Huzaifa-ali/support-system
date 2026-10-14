@@ -2,10 +2,17 @@
 
 import { useState } from "react";
 import { useParams, useRouter } from "next/navigation";
-import { ArrowLeft, ExternalLink, Trash2 } from "lucide-react";
-import { useDeleteTicket, useTicket } from "@/hooks/useTickets";
+import { ArrowLeft, Check, ExternalLink, Trash2, X } from "lucide-react";
+import {
+  useApproveTicket,
+  useDeleteTicket,
+  useRejectTicket,
+  useTicket,
+} from "@/hooks/useTickets";
+import { useAuth } from "@/hooks/useAuth";
 import { useToast } from "@/providers/ToastProvider";
 import { AssigneeControl } from "@/components/tickets/AssigneeControl";
+import { ApprovalBadge } from "@/components/tickets/ApprovalBadge";
 import { AttachmentList } from "@/components/tickets/AttachmentList";
 import { FileUpload } from "@/components/tickets/FileUpload";
 import { TicketComments } from "@/components/tickets/TicketComments";
@@ -30,8 +37,12 @@ export default function TicketDetailPage() {
   const ticketId = params?.id;
 
   const { data, isLoading, error } = useTicket(ticketId);
+  const { isAdmin } = useAuth();
   const deleteTicket = useDeleteTicket();
+  const approveTicket = useApproveTicket();
+  const rejectTicket = useRejectTicket();
   const [showDelete, setShowDelete] = useState(false);
+  const [showReject, setShowReject] = useState(false);
 
   const ticket = data?.data;
 
@@ -43,6 +54,27 @@ export default function TicketDetailPage() {
       router.push("/tickets");
     } catch {
       toast.error("Delete failed", "Please try again.");
+    }
+  }
+
+  async function handleApprove() {
+    if (!ticketId) return;
+    try {
+      await approveTicket.mutateAsync(ticketId);
+      toast.success("Ticket approved");
+    } catch {
+      toast.error("Approve failed", "Please try again.");
+    }
+  }
+
+  async function handleReject() {
+    if (!ticketId) return;
+    try {
+      await rejectTicket.mutateAsync(ticketId);
+      toast.success("Ticket rejected");
+      router.push("/tickets");
+    } catch {
+      toast.error("Reject failed", "Please try again.");
     }
   }
 
@@ -92,6 +124,25 @@ export default function TicketDetailPage() {
             </p>
           </div>
           <div className="flex shrink-0 items-center gap-2">
+            {isAdmin && ticket.approval_status === "pending_approval" && (
+              <>
+                <Button
+                  variant="primary"
+                  leftIcon={<Check className="h-4 w-4" />}
+                  onClick={handleApprove}
+                  isLoading={approveTicket.isPending}
+                >
+                  Approve
+                </Button>
+                <Button
+                  variant="danger"
+                  leftIcon={<X className="h-4 w-4" />}
+                  onClick={() => setShowReject(true)}
+                >
+                  Reject
+                </Button>
+              </>
+            )}
             <Button
               variant="outline"
               onClick={() => router.push(`/tickets/${ticketId}/edit`)}
@@ -115,6 +166,7 @@ export default function TicketDetailPage() {
         <div className="space-y-6 lg:col-span-2">
           <div className="flex flex-wrap items-center gap-2">
             <StatusBadge status={ticket.status} />
+            <ApprovalBadge status={ticket.approval_status} />
             <PriorityBadge priority={ticket.priority} />
             <TypeBadge type={ticket.type} />
             {ticket.jira_key && (
@@ -198,6 +250,17 @@ export default function TicketDetailPage() {
         confirmLabel="Delete"
         destructive
         isLoading={deleteTicket.isPending}
+      />
+
+      <ConfirmDialog
+        open={showReject}
+        onClose={() => setShowReject(false)}
+        onConfirm={handleReject}
+        title="Reject ticket?"
+        description={`This will permanently delete "${ticket.title}". This action cannot be undone.`}
+        confirmLabel="Reject"
+        destructive
+        isLoading={rejectTicket.isPending}
       />
     </div>
   );

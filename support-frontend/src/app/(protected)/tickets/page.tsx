@@ -6,9 +6,11 @@ import { Plus, Ticket as TicketIcon } from "lucide-react";
 import {
   useBulkDelete,
   useDeleteTicket,
+  usePendingTickets,
   useTickets,
 } from "@/hooks/useTickets";
 import { useSearch } from "@/hooks/useSearch";
+import { useAuth } from "@/hooks/useAuth";
 import { useProjectContext } from "@/providers/ProjectProvider";
 import { useToast } from "@/providers/ToastProvider";
 import { BulkActionBar } from "@/components/tickets/BulkActionBar";
@@ -34,6 +36,7 @@ type FilterState = Omit<
 
 export default function TicketsPage() {
   const { selectedProject } = useProjectContext();
+  const { isAdmin } = useAuth();
   const toast = useToast();
 
   const [filters, setFilters] = useState<FilterState>({});
@@ -41,6 +44,7 @@ export default function TicketsPage() {
   const [sortOrder, setSortOrder] = useState<"asc" | "desc">("desc");
   const [page, setPage] = useState(1);
   const [searchQuery, setSearchQuery] = useState("");
+  const [showPending, setShowPending] = useState(false);
   const [deleteTarget, setDeleteTarget] = useState<Ticket | null>(null);
   const [selectedIds, setSelectedIds] = useState<Set<string>>(new Set());
   const [bulkDeleteOpen, setBulkDeleteOpen] = useState(false);
@@ -54,6 +58,8 @@ export default function TicketsPage() {
   );
 
   const ticketsQuery = useTickets(query);
+  // Admin-only view of tickets awaiting approval.
+  const pendingQuery = usePendingTickets(page, PAGE_SIZE);
   // Search reuses the same status/type/priority filters as the list view.
   const searchResultsQuery = useSearch({
     q: searchQuery,
@@ -66,8 +72,13 @@ export default function TicketsPage() {
   const deleteTicket = useDeleteTicket();
   const bulkDelete = useBulkDelete();
 
-  // Swap the data source based on whether a search is in progress.
-  const active = isSearching ? searchResultsQuery : ticketsQuery;
+  // Swap the data source: search takes precedence, then the admin pending
+  // queue toggle, otherwise the standard filtered list.
+  const active = isSearching
+    ? searchResultsQuery
+    : showPending
+      ? pendingQuery
+      : ticketsQuery;
   // Memoized so its reference is stable across renders (the effect below and
   // select-all depend on it).
   const tickets = useMemo(() => active.data?.data ?? [], [active.data]);
@@ -136,6 +147,11 @@ export default function TicketsPage() {
     setPage(1); // New query starts from the first page.
   }
 
+  function handleTogglePending() {
+    setShowPending((prev) => !prev);
+    setPage(1); // Switching data source resets to the first page.
+  }
+
   function handleApplySavedFilter(saved: SavedFilterValues) {
     setFilters((prev) => ({
       ...prev,
@@ -197,6 +213,15 @@ export default function TicketsPage() {
           currentFilters={currentFilterValues}
           onApply={handleApplySavedFilter}
         />
+        {isAdmin && (
+          <Button
+            variant={showPending ? "primary" : "outline"}
+            size="sm"
+            onClick={handleTogglePending}
+          >
+            {showPending ? "Showing pending approval" : "Show pending approval"}
+          </Button>
+        )}
       </div>
 
       <FilterBar

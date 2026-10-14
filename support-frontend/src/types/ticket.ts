@@ -5,6 +5,7 @@
 export type TicketStatus = "pending" | "in_progress" | "paused" | "in_review" | "completed";
 export type TicketType = "technical_error" | "bug" | "feature" | "remove";
 export type Priority = "critical" | "high" | "medium" | "low";
+export type ApprovalStatus = "pending_approval" | "approved";
 
 export interface Ticket {
   id: string;
@@ -14,6 +15,9 @@ export interface Ticket {
   type: TicketType;
   priority: Priority;
   status: TicketStatus;
+  approval_status: ApprovalStatus;
+  approved_by: string | null;
+  approved_at: string | null;
   jira_key: string | null;
   /** Bare FK column: the creator's user id. */
   created_by: string;
