@@ -44,6 +44,20 @@ class TicketNotFoundError(NotFoundError):
         )
 
 
+class TicketAlreadyApprovedError(AppException):
+    """Attempt to reject/act on a ticket that is already approved."""
+
+    status_code = 409
+    error_code = "TICKET_ALREADY_APPROVED"
+    message = "Ticket has already been approved"
+
+    def __init__(self, ticket_id: str) -> None:
+        super().__init__(
+            message=f"Ticket '{ticket_id}' has already been approved",
+            details={"ticket_id": ticket_id},
+        )
+
+
 class ProjectNotFoundError(NotFoundError):
     """Project not found."""
 

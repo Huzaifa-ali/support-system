@@ -9,6 +9,8 @@ class AuditEvents:
     TICKET_DELETED = "ticket.deleted"
     TICKET_STATUS_CHANGED = "ticket.status_changed"
     TICKET_ASSIGNED = "ticket.assigned"
+    TICKET_APPROVED = "ticket.approved"
+    TICKET_REJECTED = "ticket.rejected"
     PROJECT_CREATED = "project.created"
     PROJECT_UPDATED = "project.updated"
     PROJECT_DELETED = "project.deleted"

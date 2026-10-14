@@ -18,6 +18,13 @@ class TicketStatus(str, Enum):
     COMPLETED = "completed"
 
 
+class ApprovalStatus(str, Enum):
+    """Approval gate status (orthogonal to the work-lifecycle status)."""
+
+    PENDING_APPROVAL = "pending_approval"
+    APPROVED = "approved"
+
+
 class TicketType(str, Enum):
     """Ticket type enum."""
 
@@ -80,6 +87,9 @@ class TicketResponse(BaseModel):
     assigned_to: Optional[UserSummary] = None
     attachments_count: int = 0
     activities_count: int = 0
+    approval_status: ApprovalStatus = ApprovalStatus.APPROVED
+    approved_by: Optional[UUID] = None
+    approved_at: Optional[datetime] = None
     created_at: datetime
     updated_at: datetime
 
@@ -96,6 +106,9 @@ class TicketListResponse(BaseModel):
     jira_key: Optional[str] = None
     created_by: Optional[UserSummary] = None
     assigned_to: Optional[UserSummary] = None
+    approval_status: ApprovalStatus = ApprovalStatus.APPROVED
+    approved_by: Optional[UUID] = None
+    approved_at: Optional[datetime] = None
     created_at: datetime
     updated_at: datetime
 
