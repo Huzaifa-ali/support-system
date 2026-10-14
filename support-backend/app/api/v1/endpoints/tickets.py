@@ -222,7 +222,7 @@ async def list_ticket_activities(
     """
     ticket_service = TicketService()
     # Raises TicketNotFoundError if the ticket is missing or in another project.
-    await ticket_service.get_by_id(ticket_id, project_id=project_id)
+    await ticket_service.get_by_id(ticket_id, project_id=project_id, viewer=user)
 
     activity_service = ActivityService()
     # The timeline shows events only; comments live in their own section.
@@ -246,7 +246,7 @@ async def list_ticket_comments(
     """List a ticket's comments in chronological order."""
     ticket_service = TicketService()
     # Raises TicketNotFoundError if the ticket is missing or in another project.
-    await ticket_service.get_by_id(ticket_id, project_id=project_id)
+    await ticket_service.get_by_id(ticket_id, project_id=project_id, viewer=user)
 
     activity_service = ActivityService()
     comments, total = await activity_service.list_comments(

@@ -36,6 +36,7 @@ async def search_tickets(
         filters={"status": status, "type": type, "priority": priority},
         page=page,
         page_size=page_size,
+        viewer=user,
     )
     return {
         "data": results,

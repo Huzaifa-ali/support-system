@@ -186,15 +186,36 @@ class UploadService:
         )
         return record
 
-    async def list_attachments(self, ticket_id: UUID) -> list[dict]:
+    async def list_attachments(
+        self, ticket_id: UUID, viewer: Optional[dict] = None
+    ) -> list[dict]:
         """List a ticket's attachments, each with a fresh presigned download URL.
 
         Args:
             ticket_id: The parent ticket.
+            viewer: The acting user record. When provided, a pending-approval
+                ticket's attachments are hidden from anyone but its creator or
+                an admin (mirrors the ticket service's visibility guard).
 
         Returns:
             List of attachment records with ``download_url`` populated.
+
+        Raises:
+            TicketNotFoundError: If the ticket does not exist, or if it is
+                pending approval and the viewer is neither its creator nor an
+                admin.
         """
+        ticket = await self._get_ticket_or_404(ticket_id)
+        if viewer is not None:
+            is_admin = viewer.get("role") == "admin"
+            is_creator = str(ticket.get("created_by")) == str(viewer.get("id"))
+            if (
+                ticket.get("approval_status") == "pending_approval"
+                and not is_admin
+                and not is_creator
+            ):
+                raise TicketNotFoundError(ticket_id=str(ticket_id))
+
         attachments = await self.repo.list_by_ticket(ticket_id)
         for attachment in attachments:
             attachment["download_url"] = (

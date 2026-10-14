@@ -1,7 +1,7 @@
 """Full-text search service."""
 
 import re
-from typing import Any
+from typing import Any, Optional
 from uuid import UUID, uuid4
 
 from app.core.exceptions import NotFoundError
@@ -39,6 +39,7 @@ class SearchService:
         filters: dict[str, Any],
         page: int = 1,
         page_size: int = 20,
+        viewer: Optional[dict] = None,
     ) -> tuple[list[dict], int]:
         """Full-text search across tickets in a project.
 
@@ -48,6 +49,8 @@ class SearchService:
             filters: Optional exact-match filters (status, type, priority).
             page: Page number (1-indexed).
             page_size: Items per page (capped at 100).
+            viewer: The acting user record. Admins see all tickets; everyone
+                else sees only approved tickets plus their own pending ones.
 
         Returns:
             Tuple of (search results, total count). Each result includes a
@@ -60,6 +63,11 @@ class SearchService:
         # multi-word queries match on all terms rather than the literal phrase.
         ts_query = self._build_ts_query(query)
 
+        # Scope approval visibility: admins see everything, others are limited
+        # to approved tickets or their own pending ones.
+        is_admin = viewer.get("role") == "admin" if viewer else False
+        viewer_id = None if (viewer is None or is_admin) else viewer.get("id")
+
         results, total = await self.repo.search_fulltext(
             query=ts_query,
             project_id=project_id,
@@ -68,6 +76,8 @@ class SearchService:
             status=filters.get("status"),
             ticket_type=filters.get("type"),
             priority=filters.get("priority"),
+            viewer_id=UUID(str(viewer_id)) if viewer_id else None,
+            include_all_approval=is_admin,
         )
 
         terms = self._extract_terms(query)

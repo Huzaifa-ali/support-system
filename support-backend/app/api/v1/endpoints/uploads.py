@@ -55,7 +55,7 @@ async def list_attachments(
 ) -> dict:
     """List all attachments for a ticket with presigned download URLs."""
     service = UploadService()
-    attachments = await service.list_attachments(ticket_id)
+    attachments = await service.list_attachments(ticket_id, viewer=user)
     return {"data": attachments}
 
 

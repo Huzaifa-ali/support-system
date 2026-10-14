@@ -77,10 +77,12 @@ class TicketRepo(BaseRepository):
         if date_to:
             query = query.lte("created_at", date_to)
 
-        if not include_all_approval and viewer_id is not None:
-            query = query.or_(
-                f"approval_status.eq.approved,created_by.eq.{viewer_id}"
-            )
+        if include_all_approval:
+            pass
+        elif viewer_id is not None:
+            query = query.or_(f"approval_status.eq.approved,created_by.eq.{viewer_id}")
+        else:
+            query = query.eq("approval_status", "approved")
 
         query = query.order(order_by, desc=order_desc)
         query = query.range(offset, offset + page_size - 1)
@@ -176,10 +178,14 @@ class TicketRepo(BaseRepository):
         if priority:
             db_query = db_query.eq("priority", priority)
 
-        if not include_all_approval and viewer_id is not None:
+        if include_all_approval:
+            pass
+        elif viewer_id is not None:
             db_query = db_query.or_(
                 f"approval_status.eq.approved,created_by.eq.{viewer_id}"
             )
+        else:
+            db_query = db_query.eq("approval_status", "approved")
 
         response = db_query.execute()
         total = response.count if response.count is not None else 0
