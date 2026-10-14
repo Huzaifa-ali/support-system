@@ -6,7 +6,11 @@ from uuid import UUID
 from fastapi import BackgroundTasks
 
 from app.audit import AuditEvents, ResourceTypes, audit_logger
-from app.core.exceptions import ForbiddenError, TicketNotFoundError
+from app.core.exceptions import (
+    ForbiddenError,
+    TicketAlreadyApprovedError,
+    TicketNotFoundError,
+)
 from app.core.logging import get_logger
 from app.db.repositories.ticket_repo import TicketRepo
 from app.db.repositories.user_repo import UserRepo
@@ -58,6 +62,10 @@ class TicketService:
         record["project_id"] = str(project_id)
         record["created_by"] = str(user_id)
         record["status"] = "pending"  # New tickets always start as pending.
+        # Approval is orthogonal to workflow status: every new ticket must be
+        # approved by an admin before it becomes visible to other users. The
+        # "new ticket" broadcast is deferred until approval (see ``approve``).
+        record["approval_status"] = "pending_approval"
 
         # Enum fields serialize to their string values for storage.
         record["type"] = data.type.value
@@ -99,14 +107,11 @@ class TicketService:
                 ip_address=ip_address,
             )
 
-        # Notify admins that a new ticket exists; if it was created already
-        # assigned to someone else, notify that assignee too. Both run in the
-        # background so the create request returns immediately.
+        # The "new ticket" broadcast is deferred to approval. If the ticket was
+        # created already assigned to someone else, notify that assignee now;
+        # that runs in the background so the create request returns immediately.
         if ticket_id and background_tasks is not None:
             tid = UUID(str(ticket_id))
-            background_tasks.add_task(
-                self.notifications.notify_ticket_created, tid, user_id
-            )
             if data.assigned_to is not None and str(data.assigned_to) != str(user_id):
                 background_tasks.add_task(
                     self.notifications.notify_ticket_assigned,
@@ -122,23 +127,37 @@ class TicketService:
                 return full
         return created
 
-    async def get_by_id(self, ticket_id: UUID, project_id: UUID) -> dict:
+    async def get_by_id(
+        self, ticket_id: UUID, project_id: UUID, viewer: Optional[dict] = None
+    ) -> dict:
         """Get a single ticket by ID, scoped to the current project.
 
         Args:
             ticket_id: UUID of the ticket.
             project_id: UUID of the current project (from context).
+            viewer: Optional acting user (``id`` and ``role``). When provided,
+                a ``pending_approval`` ticket is hidden (raised as not-found)
+                from anyone who is neither an admin nor the ticket's creator.
 
         Returns:
             The ticket record with related user data.
 
         Raises:
-            TicketNotFoundError: If the ticket does not exist or belongs to
-                another project.
+            TicketNotFoundError: If the ticket does not exist, belongs to
+                another project, or is a pending ticket hidden from ``viewer``.
         """
         ticket = await self.repo.get_with_relations(ticket_id)
         if not ticket or str(ticket.get("project_id")) != str(project_id):
             raise TicketNotFoundError(ticket_id=str(ticket_id))
+        if viewer is not None:
+            is_admin = viewer.get("role") == "admin"
+            is_creator = str(ticket.get("created_by")) == str(viewer.get("id"))
+            if (
+                ticket.get("approval_status") == "pending_approval"
+                and not is_admin
+                and not is_creator
+            ):
+                raise TicketNotFoundError(ticket_id=str(ticket_id))
         return ticket
 
     async def add_comment(
@@ -171,7 +190,15 @@ class TicketService:
             TicketNotFoundError: If the ticket is missing or in another project.
         """
         # Raises TicketNotFoundError if the ticket is missing or cross-project.
-        await self.get_by_id(ticket_id, project_id=project_id)
+        # Pass a conservative viewer so a non-creator cannot comment on a
+        # hidden pending ticket. The endpoint supplies only ``user_id`` (no
+        # role), so we assume a non-admin viewer here. See the service note on
+        # the admin-commenting limitation this introduces.
+        await self.get_by_id(
+            ticket_id,
+            project_id=project_id,
+            viewer={"id": str(user_id), "role": "user"},
+        )
 
         activity = await self.activity.add_comment(
             ticket_id=ticket_id, actor_id=user_id, comment=comment
@@ -190,6 +217,7 @@ class TicketService:
     async def list_by_project(
         self,
         project_id: UUID,
+        viewer: dict,
         page: int = 1,
         page_size: int = 20,
         status: Optional[str] = None,
@@ -206,6 +234,8 @@ class TicketService:
 
         Args:
             project_id: UUID of the current project.
+            viewer: Acting user (``id`` and ``role``). Non-admins only see
+                approved tickets plus their own; admins see every ticket.
             page: Page number (1-indexed).
             page_size: Items per page (capped at 100).
             status: Optional status filter.
@@ -229,6 +259,11 @@ class TicketService:
         if sort_by not in allowed_sort:
             sort_by = "created_at"
 
+        # Admins see everything; everyone else is scoped to approved tickets
+        # plus the ones they created (the repo enforces this via viewer_id).
+        is_admin = viewer.get("role") == "admin"
+        viewer_id = None if is_admin else viewer.get("id")
+
         return await self.repo.list_by_project(
             project_id=project_id,
             page=page,
@@ -242,6 +277,8 @@ class TicketService:
             date_to=date_to,
             order_by=sort_by,
             order_desc=sort_order.lower() != "asc",
+            viewer_id=UUID(str(viewer_id)) if viewer_id else None,
+            include_all_approval=is_admin,
         )
 
     async def update(
@@ -562,3 +599,123 @@ class TicketService:
             metadata={"title": existing.get("title")},
             ip_address=ip_address,
         )
+
+    async def list_pending(
+        self, project_id: UUID, page: int = 1, page_size: int = 20
+    ) -> tuple[list[dict], int]:
+        """List tickets awaiting approval in the given project (admin view).
+
+        Args:
+            project_id: UUID of the current project.
+            page: Page number (1-indexed).
+            page_size: Items per page (capped at 100).
+
+        Returns:
+            Tuple of (pending tickets, total count).
+        """
+        page_size = min(max(page_size, 1), 100)
+        page = max(page, 1)
+        return await self.repo.list_pending(
+            project_id=project_id, page=page, page_size=page_size
+        )
+
+    async def approve(
+        self,
+        ticket_id: UUID,
+        user: dict,
+        project_id: UUID,
+        background_tasks: Optional[BackgroundTasks] = None,
+        ip_address: Optional[str] = None,
+    ) -> dict:
+        """Approve a pending ticket, then fire the deferred "new ticket" email.
+
+        Approval is idempotent: re-approving an already-approved ticket is a
+        no-op that simply returns the current record. On the first approval the
+        ticket is marked approved (approver + timestamp recorded via the repo),
+        an audit event is written, and the deferred "new ticket" broadcast —
+        suppressed at creation — is scheduled on ``background_tasks``.
+
+        Args:
+            ticket_id: UUID of the ticket to approve.
+            user: The acting admin (needs ``id``).
+            project_id: UUID of the current project.
+            background_tasks: Optional queue for the deferred notifications.
+            ip_address: Optional client IP for the audit record.
+
+        Returns:
+            The approved ticket with related user data.
+
+        Raises:
+            TicketNotFoundError: If the ticket is missing or in another project.
+        """
+        existing = await self.repo.get_by_id(ticket_id)
+        if not existing or str(existing.get("project_id")) != str(project_id):
+            raise TicketNotFoundError(ticket_id=str(ticket_id))
+        if existing.get("approval_status") == "approved":
+            return await self.get_by_id(ticket_id, project_id)
+        await self.repo.set_approved(ticket_id, UUID(str(user["id"])))
+        await audit_logger.log(
+            actor_id=UUID(str(user["id"])),
+            action=AuditEvents.TICKET_APPROVED,
+            resource_type=ResourceTypes.TICKET,
+            resource_id=ticket_id,
+            project_id=project_id,
+            metadata={"title": existing.get("title")},
+            ip_address=ip_address,
+        )
+        if background_tasks is not None:
+            background_tasks.add_task(
+                self.notifications.notify_ticket_created,
+                ticket_id,
+                UUID(str(existing.get("created_by"))),
+            )
+            if existing.get("assigned_to"):
+                background_tasks.add_task(
+                    self.notifications.notify_ticket_assigned,
+                    ticket_id,
+                    UUID(str(existing["assigned_to"])),
+                    UUID(str(user["id"])),
+                )
+        return await self.get_by_id(ticket_id, project_id)
+
+    async def reject(
+        self,
+        ticket_id: UUID,
+        user: dict,
+        project_id: UUID,
+        ip_address: Optional[str] = None,
+    ) -> None:
+        """Reject a pending ticket: audit it, then hard-delete it.
+
+        The rejection audit entry is written BEFORE the delete so the record of
+        who rejected what (and the original creator) survives the deletion. An
+        already-approved ticket cannot be rejected.
+
+        Args:
+            ticket_id: UUID of the ticket to reject.
+            user: The acting admin (needs ``id``).
+            project_id: UUID of the current project.
+            ip_address: Optional client IP for the audit record.
+
+        Raises:
+            TicketNotFoundError: If the ticket is missing or in another project.
+            TicketAlreadyApprovedError: If the ticket is already approved.
+        """
+        existing = await self.repo.get_by_id(ticket_id)
+        if not existing or str(existing.get("project_id")) != str(project_id):
+            raise TicketNotFoundError(ticket_id=str(ticket_id))
+        if existing.get("approval_status") == "approved":
+            raise TicketAlreadyApprovedError(ticket_id=str(ticket_id))
+        await audit_logger.log(
+            actor_id=UUID(str(user["id"])),
+            action=AuditEvents.TICKET_REJECTED,
+            resource_type=ResourceTypes.TICKET,
+            resource_id=ticket_id,
+            project_id=project_id,
+            metadata={
+                "title": existing.get("title"),
+                "created_by": existing.get("created_by"),
+            },
+            ip_address=ip_address,
+        )
+        await self.repo.delete(ticket_id)
