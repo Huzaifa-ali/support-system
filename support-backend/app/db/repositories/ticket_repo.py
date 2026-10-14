@@ -1,5 +1,6 @@
 """Ticket repository for data access."""
 
+from datetime import UTC, datetime
 from typing import Any, Optional
 from uuid import UUID
 
@@ -24,6 +25,8 @@ class TicketRepo(BaseRepository):
         created_by: Optional[UUID] = None,
         date_from: Optional[str] = None,
         date_to: Optional[str] = None,
+        viewer_id: Optional[UUID] = None,
+        include_all_approval: bool = False,
         order_by: str = "created_at",
         order_desc: bool = True,
     ) -> tuple[list[dict], int]:
@@ -73,6 +76,11 @@ class TicketRepo(BaseRepository):
             query = query.gte("created_at", date_from)
         if date_to:
             query = query.lte("created_at", date_to)
+
+        if not include_all_approval and viewer_id is not None:
+            query = query.or_(
+                f"approval_status.eq.approved,created_by.eq.{viewer_id}"
+            )
 
         query = query.order(order_by, desc=order_desc)
         query = query.range(offset, offset + page_size - 1)
@@ -132,6 +140,8 @@ class TicketRepo(BaseRepository):
         status: Optional[str] = None,
         ticket_type: Optional[str] = None,
         priority: Optional[str] = None,
+        viewer_id: Optional[UUID] = None,
+        include_all_approval: bool = False,
     ) -> tuple[list[dict], int]:
         """Full-text search on tickets using PostgreSQL tsvector.
 
@@ -165,6 +175,11 @@ class TicketRepo(BaseRepository):
             db_query = db_query.eq("type", ticket_type)
         if priority:
             db_query = db_query.eq("priority", priority)
+
+        if not include_all_approval and viewer_id is not None:
+            db_query = db_query.or_(
+                f"approval_status.eq.approved,created_by.eq.{viewer_id}"
+            )
 
         response = db_query.execute()
         total = response.count if response.count is not None else 0
@@ -226,6 +241,8 @@ class TicketRepo(BaseRepository):
         date_from: Optional[str] = None,
         date_to: Optional[str] = None,
         involving_user_id: Optional[UUID] = None,
+        viewer_id: Optional[UUID] = None,
+        include_all_approval: bool = False,
     ) -> list[dict]:
         """Fetch lightweight ticket rows for dashboard aggregation.
 
@@ -268,10 +285,22 @@ class TicketRepo(BaseRepository):
             # Tickets the user created OR is currently assigned to.
             query = query.or_(f"created_by.eq.{uid},assigned_to.eq.{uid}")
 
+        if include_all_approval:
+            pass
+        elif viewer_id is not None:
+            query = query.or_(f"approval_status.eq.approved,created_by.eq.{viewer_id}")
+        else:
+            query = query.eq("approval_status", "approved")
+
         response = query.execute()
         return response.data or []
 
-    async def count_by_status(self, project_id: Optional[UUID] = None) -> dict[str, int]:
+    async def count_by_status(
+        self,
+        project_id: Optional[UUID] = None,
+        viewer_id: Optional[UUID] = None,
+        include_all_approval: bool = False,
+    ) -> dict[str, int]:
         """Count tickets grouped by status.
 
         Args:
@@ -287,7 +316,58 @@ class TicketRepo(BaseRepository):
             query = self._table().select("id", count="exact").eq("status", status)
             if project_id:
                 query = query.eq("project_id", str(project_id))
+            if include_all_approval:
+                pass
+            elif viewer_id is not None:
+                query = query.or_(
+                    f"approval_status.eq.approved,created_by.eq.{viewer_id}"
+                )
+            else:
+                query = query.eq("approval_status", "approved")
             response = query.execute()
             counts[status] = response.count if response.count is not None else 0
 
         return counts
+
+    async def list_pending(
+        self,
+        project_id: UUID,
+        page: int = 1,
+        page_size: int = 20,
+        order_by: str = "created_at",
+        order_desc: bool = True,
+    ) -> tuple[list[dict], int]:
+        """List tickets awaiting approval in a project (admin queue)."""
+        offset = (page - 1) * page_size
+        query = (
+            self._table()
+            .select(
+                "*, "
+                "created_by_user:users!tickets_created_by_fkey(id, name, email), "
+                "assigned_to_user:users!tickets_assigned_to_fkey(id, name, email)",
+                count="exact",
+            )
+            .eq("project_id", str(project_id))
+            .eq("approval_status", "pending_approval")
+            .order(order_by, desc=order_desc)
+            .range(offset, offset + page_size - 1)
+        )
+        response = query.execute()
+        total = response.count if response.count is not None else 0
+        return response.data or [], total
+
+    async def set_approved(self, ticket_id: UUID, approved_by: UUID) -> dict:
+        """Mark a ticket approved, recording the approver and timestamp."""
+        response = (
+            self._table()
+            .update(
+                {
+                    "approval_status": "approved",
+                    "approved_by": str(approved_by),
+                    "approved_at": datetime.now(UTC).isoformat(),
+                }
+            )
+            .eq("id", str(ticket_id))
+            .execute()
+        )
+        return response.data[0] if response.data else {}
