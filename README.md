@@ -41,6 +41,9 @@ and a complete audit trail.
 - **Full ticket lifecycle** — Track work through five statuses (Pending, In
   Progress, Paused, In Review, Completed), with a type and priority on every
   ticket.
+- **Admin approval gate** — New tickets stay pending and hidden until an admin
+  approves them (making them visible to all) or rejects them (permanent
+  delete). Separate from the work-status lifecycle.
 - **Inline editing** — Change status, type, and assignee directly from the
   ticket table without opening the ticket.
 - **Email notifications** — Actor-aware transactional emails via AWS SES or
@@ -87,6 +90,24 @@ lifecycle.
 
 Tickets also support comments (with @mentions), file attachments, an activity
 timeline, and inline editing of status/type/assignee from the list view.
+
+### Approval gate
+
+Every new ticket starts in a **pending approval** state, separate from the work
+`status` lifecycle above. While pending, a ticket is visible only to its creator
+and to admins — everyone else gets a `404`, so pending tickets are never
+enumerable.
+
+- **Approve** (admin) — the ticket becomes visible to everyone who can see the
+  project, and the deferred "new ticket" notification is sent at this point.
+- **Reject** (admin) — the ticket is **permanently deleted** (an audit entry is
+  recorded first).
+
+Admins work through pending tickets from an **approval queue** scoped to the
+current project. Approval is independent of the work-status lifecycle: a ticket
+is approved or not regardless of whether it is Pending, In Progress, Paused, In
+Review, or Completed. Existing tickets are treated as already approved, so
+nothing historical is hidden.
 
 ---
 

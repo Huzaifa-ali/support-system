@@ -64,7 +64,7 @@ Authorization: Bearer <cognito_access_token>
 | 401 | Missing or invalid auth token |
 | 403 | Insufficient permissions |
 | 404 | Resource not found |
-| 409 | Conflict (duplicate resource) |
+| 409 | Conflict (duplicate resource, or `TICKET_ALREADY_APPROVED` on reject) |
 | 422 | Unprocessable entity |
 | 429 | Rate limit exceeded |
 | 500 | Internal server error |
@@ -255,6 +255,9 @@ X-Project-ID: uuid
       "type": "bug",
       "priority": "high",
       "status": "in_progress",
+      "approval_status": "approved",
+      "approved_by": "uuid",
+      "approved_at": "2024-01-15T10:02:00Z",
       "jira_key": "ALPHA-123",
       "created_by": {
         "id": "uuid",
@@ -306,6 +309,11 @@ X-Project-ID: uuid
 
 **Response:** `201 Created` with ticket object.
 
+A newly created ticket is set to `approval_status: "pending_approval"` and is
+visible only to its creator and to admins until an admin approves it (see the
+approval endpoints below). The "new ticket" notification is **deferred** and
+sent when the ticket is approved, not on creation.
+
 **Side Effects (Background):**
 - Creates activity log (ticket.created)
 - Creates audit log
@@ -330,6 +338,9 @@ Get ticket by ID with full details.
     "type": "bug",
     "priority": "high",
     "status": "in_progress",
+    "approval_status": "approved",
+    "approved_by": "uuid",
+    "approved_at": "2024-01-15T10:02:00Z",
     "jira_key": "ALPHA-123",
     "created_by": { "id": "uuid", "name": "John Doe", "email": "..." },
     "assigned_to": { "id": "uuid", "name": "Jane Smith", "email": "..." },
@@ -398,6 +409,94 @@ Delete a ticket (cascades to attachments and activities).
 **Side Effects:**
 - Deletes S3 files
 - Creates audit log (ticket.deleted)
+
+#### `GET /api/v1/tickets/pending-approval`
+
+List tickets awaiting approval in the current project.
+
+**Auth:** Required (Admin only)
+
+**Headers:**
+```
+X-Project-ID: uuid
+```
+
+**Query Params:**
+| Param | Type | Default | Description |
+|-------|------|---------|-------------|
+| page | int | 1 | Page number |
+| page_size | int | 20 | Items per page |
+
+**Response:** Paginated list of ticket objects (same shape as `GET /api/v1/tickets`),
+scoped to tickets with `approval_status: "pending_approval"`.
+```json
+{
+  "data": [ { "id": "uuid", "approval_status": "pending_approval", ... } ],
+  "pagination": { ... }
+}
+```
+
+**Status Codes:**
+- `200 OK` — list returned
+- `403 Forbidden` — caller is not an admin
+
+#### `POST /api/v1/tickets/{ticket_id}/approve`
+
+Approve a pending ticket. Makes it visible to everyone who can see the project
+and sends the deferred "new ticket" notification.
+
+**Auth:** Required (Admin only)
+
+**Headers:**
+```
+X-Project-ID: uuid
+```
+
+**Response:** `200 OK`
+```json
+{
+  "data": { "id": "uuid", "approval_status": "approved", "approved_by": "uuid", "approved_at": "2024-01-15T10:02:00Z", ... },
+  "message": "Ticket approved"
+}
+```
+
+Idempotent: approving an already-approved ticket returns `200` with the ticket
+unchanged.
+
+**Status Codes:**
+- `200 OK` — ticket approved (or already approved)
+- `403 Forbidden` — caller is not an admin
+- `404 Not Found` — ticket does not exist or belongs to another project
+
+**Side Effects (Background):**
+- Sets `approved_by` / `approved_at`
+- Creates audit log (ticket.approved)
+- Sends the deferred "new ticket" notification (Discord / email, if configured)
+
+#### `POST /api/v1/tickets/{ticket_id}/reject`
+
+Reject a pending ticket. The ticket is **permanently hard-deleted**. A
+`ticket.rejected` audit entry (capturing the title and `created_by`) is written
+before deletion.
+
+**Auth:** Required (Admin only)
+
+**Headers:**
+```
+X-Project-ID: uuid
+```
+
+**Response:** `204 No Content`
+
+**Status Codes:**
+- `204 No Content` — ticket rejected and deleted
+- `403 Forbidden` — caller is not an admin
+- `404 Not Found` — ticket does not exist or belongs to another project
+- `409 Conflict` — ticket is already approved (`TICKET_ALREADY_APPROVED`)
+
+**Side Effects:**
+- Creates audit log (ticket.rejected) **before** deletion
+- Permanently deletes the ticket (cascades to attachments and activities)
 
 ---
 
@@ -865,7 +964,7 @@ Get audit log entries.
 | page | int | 1 | Page number |
 | page_size | int | 50 | Items per page |
 | actor_id | uuid | - | Filter by user |
-| action | string | - | Filter by action type |
+| action | string | - | Filter by action type (e.g. `ticket.created`, `ticket.approved`, `ticket.rejected`) |
 | resource_type | string | - | Filter: ticket, project, user |
 | project_id | uuid | - | Filter by project |
 | date_from | datetime | - | Start date |
@@ -1001,6 +1100,10 @@ class TicketStatus(str, Enum):
     PAUSED = "paused"
     IN_REVIEW = "in_review"
     COMPLETED = "completed"
+
+class TicketApprovalStatus(str, Enum):
+    PENDING_APPROVAL = "pending_approval"
+    APPROVED = "approved"
 
 class TicketType(str, Enum):
     TECHNICAL_ERROR = "technical_error"

@@ -44,6 +44,9 @@ erDiagram
         text type
         text priority
         text status
+        text approval_status
+        uuid approved_by FK
+        timestamptz approved_at
         text jira_key
         tsvector search_vector
         timestamptz created_at
@@ -136,10 +139,21 @@ erDiagram
 | type | text | NOT NULL, CHECK in enum | technical_error, bug, feature, remove |
 | priority | text | NOT NULL, CHECK in enum | critical, high, medium, low |
 | status | text | NOT NULL, DEFAULT 'pending', CHECK in enum | pending, in_progress, paused, in_review, completed |
+| approval_status | text | NOT NULL, DEFAULT 'approved', CHECK in enum | pending_approval, approved |
+| approved_by | uuid | FK → users(id) | Admin who approved (nullable) |
+| approved_at | timestamptz | | When the ticket was approved (nullable) |
 | jira_key | text | | Linked Jira issue key |
 | search_vector | tsvector | | Full-text search vector (auto-generated) |
 | created_at | timestamptz | DEFAULT now() | Creation time |
 | updated_at | timestamptz | DEFAULT now() | Last update time |
+
+> **Approval gate.** `approval_status` is independent of the work `status`: a
+> ticket can be `pending_approval` or `approved` regardless of where it sits in
+> the pending → in_progress → paused → in_review → completed lifecycle. New
+> tickets start at `pending_approval` and are visible only to their creator and
+> admins until an admin approves them; rejection permanently deletes the ticket.
+> Existing rows backfill to `approved` via the column default, so no historical
+> ticket is hidden.
 
 ### 4. attachments
 
@@ -193,6 +207,7 @@ CREATE UNIQUE INDEX idx_users_email ON users(email);
 -- Tickets
 CREATE INDEX idx_tickets_project_id ON tickets(project_id);
 CREATE INDEX idx_tickets_project_status ON tickets(project_id, status);
+CREATE INDEX idx_tickets_project_approval ON tickets(project_id, approval_status);
 CREATE INDEX idx_tickets_created_by ON tickets(created_by);
 CREATE INDEX idx_tickets_assigned_to ON tickets(assigned_to);
 CREATE INDEX idx_tickets_priority ON tickets(priority);
@@ -273,6 +288,10 @@ CREATE TRIGGER update_tickets_updated_at
 ALTER TABLE tickets ADD CONSTRAINT chk_ticket_status
   CHECK (status IN ('pending', 'in_progress', 'paused', 'in_review', 'completed'));
 
+-- Ticket approval status
+ALTER TABLE tickets ADD CONSTRAINT chk_ticket_approval_status
+  CHECK (approval_status IN ('pending_approval', 'approved'));
+
 -- Ticket type
 ALTER TABLE tickets ADD CONSTRAINT chk_ticket_type
   CHECK (type IN ('technical_error', 'bug', 'feature', 'remove'));
@@ -347,6 +366,10 @@ CREATE TABLE tickets (
     CHECK (priority IN ('critical', 'high', 'medium', 'low')),
   status text NOT NULL DEFAULT 'pending'
     CHECK (status IN ('pending', 'in_progress', 'paused', 'in_review', 'completed')),
+  approval_status text NOT NULL DEFAULT 'approved'
+    CHECK (approval_status IN ('pending_approval', 'approved')),
+  approved_by uuid REFERENCES users(id),
+  approved_at timestamptz,
   jira_key text,
   search_vector tsvector,
   created_at timestamptz DEFAULT now(),
@@ -397,6 +420,7 @@ CREATE TABLE audit_logs (
 
 CREATE INDEX idx_tickets_project_id ON tickets(project_id);
 CREATE INDEX idx_tickets_project_status ON tickets(project_id, status);
+CREATE INDEX idx_tickets_project_approval ON tickets(project_id, approval_status);
 CREATE INDEX idx_tickets_created_by ON tickets(created_by);
 CREATE INDEX idx_tickets_assigned_to ON tickets(assigned_to);
 CREATE INDEX idx_tickets_priority ON tickets(priority);
