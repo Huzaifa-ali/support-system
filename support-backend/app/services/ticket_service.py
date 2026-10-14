@@ -167,6 +167,7 @@ class TicketService:
         user_id: UUID,
         project_id: UUID,
         background_tasks: Optional[BackgroundTasks] = None,
+        viewer: Optional[dict] = None,
     ) -> dict:
         """Add a comment to a ticket and notify stakeholders + mentioned users.
 
@@ -182,6 +183,9 @@ class TicketService:
             user_id: UUID of the authenticated commenter (the actor).
             project_id: UUID of the current project (from context).
             background_tasks: Optional queue for the notification email.
+            viewer: Optional acting user (``id`` and ``role``) used for the
+                pending-ticket visibility guard. Lets an admin comment on a
+                hidden pending ticket; defaults to a non-admin viewer.
 
         Returns:
             The created activity record.
@@ -190,14 +194,14 @@ class TicketService:
             TicketNotFoundError: If the ticket is missing or in another project.
         """
         # Raises TicketNotFoundError if the ticket is missing or cross-project.
-        # Pass a conservative viewer so a non-creator cannot comment on a
-        # hidden pending ticket. The endpoint supplies only ``user_id`` (no
-        # role), so we assume a non-admin viewer here. See the service note on
-        # the admin-commenting limitation this introduces.
+        # Use the acting user's ``viewer`` (id + role) so an admin can comment
+        # on a hidden pending ticket while a non-creator still cannot. When no
+        # viewer is supplied, fall back to a conservative non-admin viewer so
+        # the previous (role-less) behavior is preserved.
         await self.get_by_id(
             ticket_id,
             project_id=project_id,
-            viewer={"id": str(user_id), "role": "user"},
+            viewer=viewer or {"id": str(user_id), "role": "user"},
         )
 
         activity = await self.activity.add_comment(

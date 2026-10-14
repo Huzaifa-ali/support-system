@@ -5,7 +5,12 @@ from uuid import UUID
 
 from fastapi import APIRouter, BackgroundTasks, Depends, Query
 
-from app.dependencies import get_client_ip, get_current_project, get_current_user
+from app.dependencies import (
+    get_admin_user,
+    get_client_ip,
+    get_current_project,
+    get_current_user,
+)
 from app.schemas.activity import CommentCreate
 from app.schemas.common import build_pagination
 from app.schemas.ticket import TicketCreate, TicketUpdate
@@ -36,6 +41,7 @@ async def list_tickets(
     service = TicketService()
     tickets, total = await service.list_by_project(
         project_id=project_id,
+        viewer=user,
         page=page,
         page_size=page_size,
         status=status,
@@ -73,6 +79,22 @@ async def list_mentionable_users(
     return {"data": users}
 
 
+@router.get("/pending-approval")
+async def list_pending_tickets(
+    page: int = 1,
+    page_size: int = 20,
+    user: dict = Depends(get_admin_user),
+    project_id: UUID = Depends(get_current_project),
+) -> dict:
+    """List tickets awaiting approval in the current project (admin only)."""
+    service = TicketService()
+    tickets, total = await service.list_pending(project_id, page, page_size)
+    return {
+        "data": tickets,
+        "pagination": build_pagination(total, page, page_size).model_dump(),
+    }
+
+
 @router.post("", status_code=201)
 async def create_ticket(
     payload: TicketCreate,
@@ -105,8 +127,43 @@ async def get_ticket(
 ) -> dict:
     """Get a ticket by ID with full details (scoped to the current project)."""
     service = TicketService()
-    ticket = await service.get_by_id(ticket_id, project_id=project_id)
+    ticket = await service.get_by_id(ticket_id, project_id=project_id, viewer=user)
     return {"data": ticket, "message": "Success"}
+
+
+@router.post("/{ticket_id}/approve")
+async def approve_ticket(
+    ticket_id: UUID,
+    background_tasks: BackgroundTasks,
+    user: dict = Depends(get_admin_user),
+    project_id: UUID = Depends(get_current_project),
+    ip_address: Optional[str] = Depends(get_client_ip),
+) -> dict:
+    """Approve a pending ticket (admin only), making it visible to everyone."""
+    service = TicketService()
+    ticket = await service.approve(
+        ticket_id,
+        user=user,
+        project_id=project_id,
+        background_tasks=background_tasks,
+        ip_address=ip_address,
+    )
+    return {"data": ticket, "message": "Ticket approved"}
+
+
+@router.post("/{ticket_id}/reject", status_code=204)
+async def reject_ticket(
+    ticket_id: UUID,
+    user: dict = Depends(get_admin_user),
+    project_id: UUID = Depends(get_current_project),
+    ip_address: Optional[str] = Depends(get_client_ip),
+) -> None:
+    """Reject and permanently delete a pending ticket (admin only)."""
+    service = TicketService()
+    await service.reject(
+        ticket_id, user=user, project_id=project_id, ip_address=ip_address
+    )
+    return None
 
 
 @router.patch("/{ticket_id}")
@@ -223,5 +280,6 @@ async def add_ticket_comment(
         user_id=user["id"],
         project_id=project_id,
         background_tasks=background_tasks,
+        viewer=user,
     )
     return {"data": activity, "message": "Comment added"}
